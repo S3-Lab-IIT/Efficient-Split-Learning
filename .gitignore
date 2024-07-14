@@ -1,0 +1,13 @@
+__pycache__
+*.pth
+*.pt
+wandb
+.ipynb_checkpoints
+*venv
+*.ipynb
+!overhead_analysis/*.ipynb
+/cifar-10-python.tar.gz
+*.csv
+.fuse_hidden002115d900000006
+.fuse_hidden*
+.fuse_hidden*
