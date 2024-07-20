@@ -206,8 +206,8 @@ class CIFAR10DataBuilder:
 
     def download_data(self):
         transform = transforms.Compose([transforms.ToTensor()])
-        train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
-        test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+        train_dataset = datasets.CIFAR10(root='/media/imroze/A8DCE5B8DCE580C4/ESL/Code/ESL/data', train=True, download=True, transform=transform)
+        test_dataset = datasets.CIFAR10(root='/media/imroze/A8DCE5B8DCE580C4/ESL/Code/ESL/data', train=False, download=True, transform=transform)
         return train_dataset, test_dataset
 
     def get_default_transforms(self):

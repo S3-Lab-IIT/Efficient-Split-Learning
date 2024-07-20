@@ -44,13 +44,6 @@ class ConnectedClient(object):
         self.back_model = None
         self.center_model = None
         self.center_front_model=None
-        self.discriminator=None # added by acs
-        self.discriminator_loss_fn = None # added by acs
-        self.discriminator_train_loss = 0 # added by acs
-        self.discriminator_test_loss = 0 # added by acs
-        self.discriminator_main_test_loss = 0 # added by acs
-        self.disc_loss = None #added by acs
-        self.discriminator_optimizer = None # added by acs
         self.center_back_model=None
         self.train_fun = None
         self.test_fun = None
@@ -123,29 +116,7 @@ class ConnectedClient(object):
             # Convert the numpy array to a tensor and move it to the appropriate device
             self.middle_activations = torch.tensor(activations_array, device=self.device)
             #print("Middle activations created from train activation_mappings based on batchkeys.")
-    
-    def forward_discriminator(self):
-        self.reconstructions = self.discriminator(self.middle_activations)
-        
-    def forward_discriminator_test(self):
-        self.reconstructions = self.discriminator(self.middle_activations)
-        
-    
-    def calculate_discriminator_loss(self, mode):
-        
-        self.disc_loss  = self.discriminator_loss_fn(self.reconstructions, self.middle_activations)
-        if mode=="train":
-            self.discriminator_train_loss+=self.disc_loss.item()
-        elif mode=="test":
-            self.discriminator_test_loss+=self.disc_loss.item()
-        else:
-            self.discriminator_main_test_loss+=self.disc_loss.item()
-        
-    def discriminator_step(self):
-        self.discriminator_optimizer.step()
-    
-    def zero_grad_back(self):
-        self.discriminator_optimizer.zero_grad()
+            
             
     def forward_center_front_test(self):
         if self.kv_test_flag==1:

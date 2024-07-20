@@ -37,10 +37,6 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
-# discriminator model
-from .models.discriminator import Discriminator
-
-
 #plot
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -86,11 +82,6 @@ class ICTrainer:
             key = list(self.clients.keys())[0]
             self.clients['pooled_client'] = self.clients.pop(key) 
         self.client_ids = list(self.clients.keys())
-        
-        self.clients_threshold = dict()
-        for c_id, _ in self.clients.items():
-            self.clients_threshold[c_id]=0
-        
         data = []
         for idx, (c_id, client) in enumerate(self.clients.items()):
             train_ds, test_ds, main_test_ds = self.cifar_builder.get_datasets(client_id=idx, pool=self.pooling_mode)
@@ -223,15 +214,7 @@ class ICTrainer:
             except AttributeError as e:
                 print(f"Error initializing center front model for server copy of client {c_id}: {e}")
                 continue
-            
-            try:
-                discriminator = Discriminator().to(self.device)
-                sc_client.discriminator = discriminator
-                sc_client.discriminator_loss_fn = nn.MSELoss()
-                sc_client.discriminator_optimizer = Adam(sc_client.discriminator.parameters(), lr=0.001, betas=(0.9, 0.999))
-            except AttributeError as e:
-                print(f"Error initializing discriminator model for server copy of client {c_id}: {e}")
-            
+
             try:
                 sc_client.center_back_model = model.center_back().to(self.device)
                 #s_client.center_optimizer = optim.Adam(s_client.center_model.parameters(), args.lr)
@@ -525,45 +508,7 @@ class ICTrainer:
             # merge model weights (center and back)
             #print()
             #self.merge_model_weights(epoch)
-    
-    def train_one_epoch_discriminator(self, epoch):
-        '''
-        In this epoch:
-            -for every batch of data available:
-                - forward the self.middle_activations to the auto encoder for training
-                - back propagate the loss gradient
-                - step the optimizer
-                - calculate the loss metric
-        '''
-        print(f"\n\n Discriminator Phase Training {epoch}..........................................................................................")
-        
-        for client_id, client in tqdm(self.clients.items()):
-            client.iterator = iter(client.train_DataLoader)
-            client.num_iterations = len(client.train_DataLoader)
             
-            for iteration in tqdm(range(client.num_iterations), desc="Discriminator Phase Training"):
-                client.forward_front_key_value()
-                
-                self.sc_clients[client_id].batchkeys=client.key
-                
-                self.sc_clients[client_id].forward_center_front()
-                self.sc_clients[client_id].forward_discriminator()
-                self.sc_clients[client_id].calculate_discriminator_loss(mode="train")
-                wandb.log({'discriminator step loss': self.sc_clients[client_id].disc_loss.item()})
-                self.sc_clients[client_id].disc_loss.backward()
-                self.sc_clients[client_id].discriminator_step()
-                self.sc_clients[client_id].zero_grad_back()
-            
-        avg_loss = 0
-            
-        for c_id, client in self.clients.items():
-            self.sc_clients[c_id].discriminator_train_loss /= client.num_iterations
-            avg_loss+=self.sc_clients[c_id].discriminator_train_loss
-            # wandb.log({f'train f1 {c_id}': client.train_f1[-1].item()})
-            wandb.log({f'discriminator train loss of discriminator for {c_id}': self.sc_clients[c_id].discriminator_train_loss})
-            self.sc_clients[c_id].discriminator_train_loss = 0
-        
-        wandb.log({f'avg discriminator train loss of clients': avg_loss / self.num_clients})       
     
     def train_one_epoch_personalise(self,epoch):
         """
@@ -689,100 +634,6 @@ class ICTrainer:
         wandb.log({'Validation avg f1 macro all clients': bal_acc})
         wandb.log({'Validation avg loss all clients': avg_loss / self.num_clients}) 
 
-    @torch.no_grad()
-    def test_one_epoch_disc(self, epoch):
-        """
-        in this epoch:
-            - for every batch of data available:
-                - forward center_back model of server
-                - forward back model of client
-                - calculate batch metric
-
-            - calculate epoch metric per client
-            - calculate epoch metric avg. for all clients
-        """
-
-        num_iters = self.create_iters(dl='test')
-        #self.overall_f1['test'].append(0)
-        #self.overall_acc['test'].append(0)
-
-        #for c_id, client in self.clients.items():
-        #    client.pred = []
-        #    client.y = []
-
-        for client_id, client in tqdm(self.clients.items()):
-                client.num_test_iterations = len(client.test_DataLoader)
-                client.test_iterator = iter(client.test_DataLoader)
-                for iteration in tqdm(range(client.num_test_iterations),desc="Validation"):
-                    client.forward_front_key_value_test()
-                    self.sc_clients[client_id].test_batchkeys = client.test_key
-                    self.sc_clients[client_id].forward_center_front_test()
-                    # added by acs
-                    self.sc_clients[client_id].forward_discriminator_test()
-                    self.sc_clients[client_id].calculate_discriminator_loss(mode="test")
-                    
-                    wandb.log({'discriminator Validation step loss': self.sc_clients[client_id].disc_loss.item()})
-                    
-                    #self.sc_clients[client_id].forward_center_back()
-                    #client.remote_activations2 = self.sc_clients[client_id].remote_activations2
-                    #client.forward_back()
-                    #client.calculate_loss(mode='test')
-                    #wandb.log({'Validation step loss': client.loss.item()})
-                    #f1=client.calculate_test_metric()
-                    #client.test_f1[-1] += f1 
-                    #print("validation f1 per iteration: ",iteration,f1)
-                    #wandb.log({f'Validation f1 / iter: client {client_id}':f1.item()})
-                    
-        # calculate per epoch metrics
-        avg_disc_test_loss = 0
-        #bal_accs,f1_macros = [], []
-        for c_id, client in self.clients.items():
-            #client.test_f1[-1] /= len(client.test_DataLoader)
-            #client.test_loss /= len(client.test_DataLoader)
-            # added by acs
-            self.sc_clients[c_id].discriminator_test_loss /= len(client.test_DataLoader)
-            # calculate remaining metrics
-            avg_disc_test_loss += self.sc_clients[c_id].discriminator_test_loss
-            #bal_acc_client, f1_macro_client = client.get_main_metric(mode='test')
-            #bal_accs.append(bal_acc_client)
-            #f1_macros.append(f1_macro_client)
-            #self.overall_f1['test'][-1] += client.test_f1[-1]
-            #wandb.log({f'Validation f1 {c_id}': client.test_f1[-1].item()})
-            #wandb.log({f'Validation accuracy {c_id}':bal_acc_client})
-            #wandb.log({f'Validation macro f1 {c_id}':f1_macro_client})
-            #wandb.log({f'Validation loss {c_id}': client.test_loss})
-            #added by acs
-            wandb.log({f'Validation loss of {c_id} discriminator': self.sc_clients[c_id].discriminator_test_loss})
-            self.clients_threshold[c_id]=self.sc_clients[c_id].discriminator_test_loss
-            self.sc_clients[c_id].discriminator_test_loss=0
-            
-            #client.test_loss = 0 # reset for next epoch
-        print(f'>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Thresholds : {self.clients_threshold}')  
-        # calculate epoch metrics across clients
-        # bal_acc = np.array(bal_accs).mean()
-        # self.overall_acc['test'][-1]=bal_acc
-        # f1_macro = np.array(f1_macros).mean()
-        # self.overall_f1['test'][-1] /= self.num_clients
-        # print("validation f1: ", self.overall_f1['test'][-1])
-        # print("validation acc: ", self.overall_acc['test'][-1])
-        # wandb.log({'Validation avg f1 all clients': self.overall_f1['test'][-1].item()})
-        # wandb.log({'validation avg accuracy all clients': bal_acc})
-        # wandb.log({'Validation avg f1 macro all clients': bal_acc})
-        wandb.log({'Discriminator validation avg loss of all clients': avg_disc_test_loss / self.num_clients}) 
-        # if self.overall_acc['test'][-1] > self.best_acc:
-        #     print(self.best_acc)
-        #     self.best_acc = self.overall_acc['test'][-1]
-        #     self.best_epoch = epoch
-        #     self.early_stop_counter = 0
-        #     print(f"MAX Validation Accuracy Score: {self.best_acc} @ epoch {self.best_epoch}")
-        #     wandb.log({
-        #         'max validation accuracy score':self.best_acc,
-        #         'max_validation_accuarcy_epoch':self.best_epoch
-        #     })
-        #     return True
-        # else:
-        #     self.early_stop_counter += 1
-        #     return False
     
     @torch.no_grad()
     def test_one_epoch(self,epoch):
@@ -866,79 +717,82 @@ class ICTrainer:
             self.early_stop_counter += 1
             return False
                     
-    def save_models(self,epoch):
+    def save_models(self, epoch):
         """
-        save client-side back and server-side center_back models to disk
+        Save client-side back and server-side center_back models to disk
         """
         print("Save Model at epoch", epoch)
-        if self.personalization_mode ==False:
+        if self.personalization_mode == False:
             print("Save Best Model for Generalisation Phase")
             for c_id in self.client_ids:
                 # client-side front model
                 front_state_dict = self.clients[c_id].front_model.state_dict()
                 torch.save(front_state_dict, self.save_dir / f'client_{c_id}_{self.args.model}_front.pth')
-                torch.save(self.clients[c_id].front_model, self.save_dir / f'client_{c_id}_{self.args.model}_front_model.pth')
                 # server-side center_front model
                 center_front_state_dict = self.sc_clients[c_id].center_front_model.state_dict()
                 torch.save(center_front_state_dict, self.save_dir / f'client_{c_id}_{self.args.model}_center_front.pth')
-                torch.save(self.sc_clients[c_id].center_front_model, self.save_dir / f'client_{c_id}_{self.args.model}_center_front_model.pth')
                 # server-side center_back model
                 center_back_state_dict = self.sc_clients[c_id].center_back_model.state_dict()
                 torch.save(center_back_state_dict, self.save_dir / f'client_{c_id}_{self.args.model}_center_back.pth')
-                torch.save(self.sc_clients[c_id].center_back_model, self.save_dir / f'client_{c_id}_{self.args.model}_center_back_model.pth')
                 # client-side back model
                 back_state_dict = self.clients[c_id].back_model.state_dict()
                 torch.save(back_state_dict, self.save_dir / f'client_{c_id}_{self.args.model}_back.pth')
-                torch.save(self.clients[c_id].back_model, self.save_dir / f'client_{c_id}_{self.args.model}_back_model.pth')
         else:
+            print("Save Best Model for Personalisation Phase")
             for c_id in self.client_ids:
-                print("Save Best Model for Personlalisation Phase")
                 # client-side back model
                 back_state_dict = self.clients[c_id].back_model.state_dict()
                 torch.save(back_state_dict, self.save_dir / f'client_{c_id}_{self.args.model}_back_per.pth')
-                torch.save(self.clients[c_id].back_model, self.save_dir / f'client_{c_id}_{self.args.model}_back_per_model.pth')
+
             
-    def load_best_models(self,):
+
+    def load_best_models(self):
         """
-        replaces the latest models with the best models on server and client-side
+        Replace the latest models with the best models on server and client-side
         """
-        print("Loaded Best Model")
+        print("Loading Best Model")
 
         model = importlib.import_module(self.import_module)
 
         for c_id in self.client_ids:
+            # Load front model
             front = model.front().to(self.device)
             front_sd = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_front.pth')
             front.load_state_dict(front_sd)
-            # front = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_front_model.pth').to(self.device)
+
+            # Load center_front model
             center_front = model.center_front().to(self.device)
             center_front_sd = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_front.pth')
             center_front.load_state_dict(center_front_sd)
-            # center_front = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_front_model.pth').to(self.device)
+
+            # Load center_back model
             center_back = model.center_back().to(self.device)
             center_back_sd = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_back.pth')
             center_back.load_state_dict(center_back_sd)
-            # center_back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_back_model.pth').to(self.device)
+
+            # Load back model
             back = model.back().to(self.device)
             if self.personalization_mode == False:
                 print("Load Best Model for Generalisation Phase")
                 back_sd = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back.pth')
-                # back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_model.pth').to(self.device)
             else:
                 print("Load Best Model for Personalisation Phase")
                 back_sd = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_per.pth')
-                # back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_per_model.pth').to(self.device)
             back.load_state_dict(back_sd)
-            
+
+            # Assign loaded models to clients
             self.clients[c_id].front_model = front
             self.clients[c_id].back_model = back
             self.sc_clients[c_id].center_front_model = center_front
             self.sc_clients[c_id].center_back_model = center_back
-            
-            self.clients[c_id].front_model.eval()
-            self.clients[c_id].back_model.eval()
-            self.sc_clients[c_id].center_front_model.eval()
-            self.sc_clients[c_id].center_back_model.eval()
+
+            # Ensure models are moved to the correct device
+            self.clients[c_id].front_model.to(self.device)
+            self.clients[c_id].back_model.to(self.device)
+            self.sc_clients[c_id].center_front_model.to(self.device)
+            self.sc_clients[c_id].center_back_model.to(self.device)
+
+            print(f"Loaded best models for client {c_id}")
 
     @torch.no_grad()
     def inference(self,):
@@ -948,22 +802,10 @@ class ICTrainer:
 
         print("RUNNING INFERENCE from the best models on test dataset")
 
-        # self.load_best_models()
+        #self.load_best_models()
         avg_acc=0
         for c_id in tqdm(self.client_ids,desc="Testing"):
-            # front = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_front_model.pth').to(self.device)
-            # front.eval()
-            # center_front = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_front_model.pth').to(self.device)
-            # center_front.eval()
-            # center_back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_center_back_model.pth').to(self.device)
-            # center_back.eval()
-            # if self.personalization_mode == False:
-            #     print("Load Best Model for Generalisation Phase")
-            #     back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_model.pth').to(self.device)
-            # else:
-            #     print("Load Best Model for Personalisation Phase")
-            #     back = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_per_model.pth').to(self.device)
-            # back.eval()
+
             trues = []
             preds = []
 
@@ -974,10 +816,6 @@ class ICTrainer:
                 x2 = self.sc_clients[c_id].center_front_model(x1)
                 x3 = self.sc_clients[c_id].center_back_model(x2)
                 x4 = self.clients[c_id].back_model(x3)
-                # x1 = front(image)
-                # x2 = center_front(x1)
-                # x3 = center_back(x2)
-                # x4 = back(x3)
 
                 trues.append(label.cpu())
                 preds.append(x4.cpu())
@@ -999,95 +837,12 @@ class ICTrainer:
                 )
             })
 
-            print(f'inference score {c_id}: {accuracy}')
+            #print(f'inference score {c_id}: {accuracy}')
             avg_acc+=accuracy
             wandb.log({f'inference score {c_id}': accuracy})
-        print(f'Average inference score: {avg_acc/len(self.clients)}')
+        print(f'Average inference score: {avg_acc/10}')
 
-    def inference_new(self,):
-        '''
-        run inference individually on every data point from main_test_dataset
-        '''
-        print('running inference_new on main_test_dataset')
-        avg_acc=0
-        # for c_id in tqdm(self.client_ids,desc="Testing_New"):
-        
-        # self.load_best_models()
-        for idx, (c_id, client) in enumerate(self.clients.items()):
-            trues=[]
-            preds=[]
-            generalized=[]
-            personalized=[]
-            c=0
-            c1=0
-            c2=0
-            for data in client.main_test_dataset:
-                c+=1
-                self.sc_clients[c_id].discriminator.eval()
-                image = data['image'].to(self.device)
-                image = torch.unsqueeze(image, 0)
-                label = data['label'].to(self.device)
-                x1 = self.clients[c_id].front_model(image)
-                x2 = self.sc_clients[c_id].center_front_model(x1)
-                
-                reconstruction = self.sc_clients[c_id].discriminator(x2)
-                loss = self.sc_clients[c_id].discriminator_loss_fn(reconstruction, x2)
-                
-                if loss > self.clients_threshold[c_id]:
-                    c1+=1
-                    # print(f"{loss}>{self.clients_threshold[c_id]}")
-                    generalized.append([image, label])
-                else:
-                    c2+=1
-                    # print(f"less")
-                    personalized.append([image, label])
-            print(f'test images in  {c_id} : {c} ; {c1},{c2}')
-            
-            print(f"------------no of data points predicted ood in {c_id}: {len(generalized)}")
-            self.clients[c_id].back_model = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_model.pth')
-            for image, label in generalized:
-                x1 = self.clients[c_id].front_model(image)
-                x2 = self.sc_clients[c_id].center_front_model(x1)
-                x3 = self.sc_clients[c_id].center_back_model(x2)
-                x4 = self.clients[c_id].back_model(x3)
-                
-                trues.append(label.cpu())
-                preds.append(x4.cpu())
-            
-            
-            print(f"------------no of data points predicted id in {c_id}: {len(personalized)}")
-            self.clients[c_id].back_model = torch.load(self.save_dir / f'client_{c_id}_{self.args.model}_back_per_model.pth')
-            for image, label in personalized:
-                x1 = self.clients[c_id].front_model(image)
-                x2 = self.sc_clients[c_id].center_front_model(x1)
-                x3 = self.sc_clients[c_id].center_back_model(x2)
-                x4 = self.clients[c_id].back_model(x3)
-                
-                trues.append(label.cpu())
-                preds.append(x4.cpu())
-            
-            trues= [torch.unsqueeze(t, 0) for t in trues]
-            preds = torch.cat(preds)
-            targets = torch.cat(trues)
-            #print("Shapes - preds:", preds.shape, "targets:", targets.shape)
-            targets = targets.reshape(-1).numpy()
-            preds = np.argmax(preds.detach().numpy(), axis=1)
-            correct = np.sum(preds == targets)
-            total = len(targets)
-            accuracy = correct / total
-            
-            wandb.log({
-                'inference cfm': wandb.plot.confusion_matrix(
-                    preds=preds,
-                    y_true=targets,
-                    class_names=[f'{i}' for i in range(10)]
-                )
-            })
-            
-            avg_acc+=accuracy
-            wandb.log({f'inference score {c_id}': accuracy})
-        print(f'Average inference score: {avg_acc/len(self.clients)}')
-    
+
     def clear_cache(self,):
         gc.collect()
         torch.cuda.empty_cache()
@@ -1178,22 +933,15 @@ class ICTrainer:
                 print("Model improved and saved.")
                 self.save_models(epoch)
                 self.inference()
+                self.load_best_models()
+                self.inference()
                 #self.save_kv() # for personalisation phase
             else:
                 if self.early_stop_counter == 5:
                     self.early_stop = True
-    
+
             self.clear_cache()
-        
-        for run in range(60):
-            for c_id in self.client_ids:
-                self.sc_clients[c_id].discriminator.train()
-            self.train_one_epoch_discriminator(run)  # added by acs
-            for c_id in self.client_ids:
-                self.sc_clients[c_id].discriminator.eval()
-            self.test_one_epoch_disc(run)
-                    
-        #self.load_best_models
+        self.load_best_models()
         #self.inference()
         # final metrics
         #print(f'\n\n\n{"::"*10}BEST METRICS{"::"*10}')
@@ -1215,11 +963,9 @@ class ICTrainer:
                     self.clients[c_id].back_model.eval()
                 self.test_one_epoch_personalise(epoch)
                 self.clear_cache()
-                self.save_models(epoch)
+                #self.save_models()
                 self.inference()
-        print("**HYBRID INFERENCE**")
-        self.inference_new()
-        
+                
     def __init__(self,args):
         """
         implementation of PFSL training & testing simulation on ISIC-2019 dataset

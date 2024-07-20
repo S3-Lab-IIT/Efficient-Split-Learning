@@ -71,8 +71,7 @@ if __name__ == '__main__':
             raise NotImplementedError
         
         trainer.fit()
-        # print("HYBRID INFERENCE")
-        # trainer.inference_new()
+        trainer.inference()
 
     else:
         print('invalid dataset -_-')

@@ -99,13 +99,15 @@ class Client(Thread):
      
     @torch.no_grad()    
     def normal_accuracy(self, preds, targets):
-        targets = targets.reshape(-1).numpy()
-        preds = np.argmax(preds.numpy(), axis=1)
-        correct = np.sum(preds == targets)
-        total = len(targets)
-        accuracy = correct / total
-        
-        return accuracy
+	    """
+	    Calculates normal accuracy for classification tasks
+	    """
+	    targets = targets.reshape(-1).numpy()
+	    preds = np.argmax(preds.numpy(), axis=1)
+	    correct = np.sum(preds == targets)
+	    total = len(targets)
+	    accuracy = correct / total
+	    return accuracy
 	    
     @torch.no_grad()
     def run_metric(self,preds,targets):
